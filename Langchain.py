@@ -1,10 +1,19 @@
 from langchain.llms import LlamaCpp
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from langchain.memory import ConversationBufferMemory  # New import for memory
+from langchain.memory import ConversationBufferMemory
+from langchain.callbacks.base import BaseCallbackHandler
 import sys
 import os
 import contextlib
+
+class StreamHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.tokens = []
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.tokens.append(token)
+        print(token, end='', flush=True)
 
 @contextlib.contextmanager
 def suppress_stderr():
@@ -18,17 +27,16 @@ def suppress_stderr():
 
 model_path = "/Users/mo/.lmstudio/models/lmstudio-community/Qwen2.5-7B-Instruct-1M-GGUF/Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf"
 
-# Initialize memory
 memory = ConversationBufferMemory(memory_key="history", input_key="question")
 
 llm = LlamaCpp(
     model_path=model_path,
     temperature=0.7,
     max_tokens=256,
-    verbose=False
+    verbose=False,
+    streaming=True  # Enable streaming
 )
 
-# Updated template with history
 template = """
 You are a helpful assistant with memory.
 
@@ -40,8 +48,6 @@ Assistant:
 """
 
 prompt = PromptTemplate(input_variables=["history", "question"], template=template)
-
-# Add memory to the chain
 chain = LLMChain(llm=llm, prompt=prompt, memory=memory)
 
 while True:
@@ -49,7 +55,12 @@ while True:
     if user_input.lower() in ["exit", "quit"]:
         break
 
-    with suppress_stderr():
-        response = chain.run(question=user_input)
+    stream_handler = StreamHandler()
 
-    print(f"Chatbot: {response}\n")
+    print("Chatbot: ", end='', flush=True)
+    with suppress_stderr():
+        response = chain.run(
+            question=user_input,
+            callbacks=[stream_handler]
+        )
+    print("\n")

@@ -41,7 +41,8 @@ chain = LLMChain(llm=llm, prompt=prompt)
 # Start the chatbot loop.
 while True:
     user_input = input("You: ").strip()
-    if user_input.lower() in ["exit", "quit"]:
+    if user_input.lower() in ["exit", "quit"]\
+            :
         break
 
     # Option 1: Suppress extra logs during generation.

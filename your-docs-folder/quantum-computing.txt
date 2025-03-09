@@ -1,0 +1,4 @@
+Quantum computing leverages quantum mechanics to process information.
+Qubits can exist in superposition states, enabling parallel computations.
+Major players include IBM, Google, and D-Wave. Applications include cryptography optimization and drug discovery.
+Current challenges: maintaining qubit coherence, error rates.

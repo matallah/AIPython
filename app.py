@@ -1,3 +1,4 @@
+
 # app.py
 import streamlit as st
 from doc_search import SmartSearchSystem  # Assume previous code is in doc_search.py

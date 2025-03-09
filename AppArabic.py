@@ -1,19 +1,31 @@
 import streamlit as st
 import chromadb
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import time
+
+# Set RTL direction for Arabic text
+st.markdown("""
+    <style>
+    body {
+        direction: rtl;
+        text-align: right;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Initialize Chroma for local storage
 client = chromadb.PersistentClient(path="./chroma_db")
 collection = client.get_or_create_collection("documents")
 
-# Load Arabic-compatible models (cached locally after first download)
+# Load models (cached after first download)
 @st.cache_resource
 def load_models():
-    embedder = SentenceTransformer('aubmindlab/bert-base-arabertv02')
-    qa_pipeline = pipeline('question-answering', model='aubmindlab/bert-base-arabertv02')
+    embedder = SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')
+    # Use slow tokenizer to avoid conversion error
+    tokenizer = AutoTokenizer.from_pretrained('ZeyadAhmed/AraElectra-Arabic-SQuADv2-QA')
+    qa_pipeline = pipeline('question-answering', model='ZeyadAhmed/AraElectra-Arabic-SQuADv2-QA', tokenizer=tokenizer)
     return embedder, qa_pipeline
 
 embedder, qa_pipeline = load_models()
@@ -24,7 +36,7 @@ def process_documents(files):
     current_time = str(time.time())
 
     for file in files:
-        content = file.read().decode("utf-8")  # Supports Arabic UTF-8 encoding
+        content = file.read().decode("utf-8")  # Supports Arabic UTF-8
         chunks = text_splitter.split_text(content)
         embeddings = embedder.encode(chunks)
         ids = [f"{current_time}_{i}" for i in range(len(chunks))]
@@ -39,7 +51,7 @@ def process_documents(files):
 # Streamlit interface
 st.title("نظام البحث الذكي في المستندات (عربي)")
 
-# Sidebar for uploading Arabic documents
+# Sidebar for uploading documents
 st.sidebar.header("رفع المستندات النصية")
 uploaded_files = st.sidebar.file_uploader(
     "ارفع ملفات .txt",
@@ -50,7 +62,7 @@ uploaded_files = st.sidebar.file_uploader(
 if uploaded_files:
     process_documents(uploaded_files)
 
-# Sidebar for asking questions in Arabic
+# Sidebar for asking questions
 st.sidebar.header("اطرح سؤالاً")
 question = st.sidebar.text_input("أدخل سؤالك (مثلاً: 'أين الولد؟')")
 
@@ -58,7 +70,7 @@ if question:
     if collection.count() == 0:
         st.error("لم يتم العثور على مستندات. الرجاء رفع ملفات نصية أولاً.")
     else:
-        # Generate embedding for the Arabic question
+        # Generate embedding for the question
         question_embedding = embedder.encode([question])[0]
 
         # Query Chroma for the most relevant chunk
@@ -87,11 +99,11 @@ if question:
         st.subheader("السياق المصدر")
         st.markdown(highlighted_context)
 
-# Instructions in Arabic
+# Instructions
 st.sidebar.markdown("""
 ### التعليمات
-1. ارفع ملفات `.txt` التي تحتوي على نصوص عربية باستخدام أداة الرفع.
+1. ارفع ملفات `.txt` التي تحتوي على نصوص عربية.
 2. انتظر رسالة النجاح التي تؤكد المعالجة.
-3. أدخل سؤالاً بالعربية (مثل "أين الولد؟") للبحث.
+3. أدخل سؤالاً بالعربية (مثل "أين الولد؟").
 4. شاهد الإجابة والسياق من المستند.
 """)

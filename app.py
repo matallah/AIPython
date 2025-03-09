@@ -62,20 +62,88 @@ if query:
         # Perform search
         response = system.smart_search(query)
 
-        # Display results
+        # Display main answer
         st.subheader("AI Answer")
-        st.markdown(f'<div class="answer-box">{response}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="answer-box">{response["answer"]}</div>',
+                    unsafe_allow_html=True)
 
-        # Show performance
+        # Display raw results
+        st.subheader("Search Results Analysis")
+
+        cols = st.columns([1, 4])
+        with cols[0]:
+            min_score = st.slider(
+                "Filter by confidence",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.3,
+                step=0.05
+            )
+
+        with cols[1]:
+            st.caption(f"Showing {len(response['results'])} total matches")
+
+        for i, (doc, score) in enumerate(response["results"], 1):
+            if score < min_score:
+                continue
+
+            source = os.path.basename(doc.metadata['source'])
+            content = doc.page_content.replace("\n", " ").strip()
+
+            with st.expander(f"Match {i}: {source} (Score: {score:.2f})"):
+                col1, col2 = st.columns([2, 8])
+                with col1:
+                    st.metric("Confidence", f"{score:.2f}")
+                    st.progress(score)
+                with col2:
+                    st.write(content)
+
+        # Performance metrics
         end_time = time.time()
         st.caption(f"⏱️ Response time: {end_time - start_time:.2f}s")
 
-# Display current documents
+# Display current documents with content preview
 st.sidebar.markdown("---")
 st.sidebar.subheader("Indexed Documents")
+
 if os.path.exists("./your-docs-folder"):
     docs = [f for f in os.listdir("./your-docs-folder") if f.endswith((".txt", ".md"))]
+
+    # Initialize session state for selected document
+    if 'selected_doc' not in st.session_state:
+        st.session_state.selected_doc = None
+
     for doc in docs:
-        st.sidebar.markdown(f'<div class="doc-box">📄 {doc}</div>', unsafe_allow_html=True)
+        col1, col2 = st.sidebar.columns([3, 1])
+        with col1:
+            # Create clickable document names
+            if st.button(f"📄 {doc}", key=f"doc_{doc}"):
+                st.session_state.selected_doc = doc
+        with col2:
+            # Show document size
+            doc_path = os.path.join("./your-docs-folder", doc)
+            size = os.path.getsize(doc_path) / 1024  # KB
+            st.caption(f"{size:.1f}KB")
+
+    # Display selected document content
+    if st.session_state.selected_doc:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Document Preview")
+        try:
+            doc_path = os.path.join("./your-docs-folder", st.session_state.selected_doc)
+            with open(doc_path, "r") as f:
+                content = f.read()
+
+            st.sidebar.text_area(
+                "File Content",
+                value=content,
+                height=300,
+                key=f"content_{st.session_state.selected_doc}",
+                disabled=True
+            )
+        except Exception as e:
+            st.sidebar.error(f"Error reading file: {str(e)}")
 else:
     st.sidebar.warning("No documents uploaded yet")
+
+# What is the special code?

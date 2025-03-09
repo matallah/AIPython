@@ -1,9 +1,11 @@
 import streamlit as st
 import chromadb
-from langchain_text_splitters import CharacterTextSplitter, RecursiveCharacterTextSplitter
+import re
+import time
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline, AutoTokenizer
-import time
+from collections import defaultdict
 
 # تنسيق النصوص العربية
 st.markdown("""
@@ -11,6 +13,13 @@ st.markdown("""
     body {
         direction: rtl;
         text-align: right;
+        font-family: 'Arial', sans-serif;
+    }
+    .ar-text {
+        line-height: 2;
+    }
+    mark {
+        background-color: yellow;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -31,11 +40,13 @@ def load_models():
     )
     return embedder, qa_pipeline, qa_tokenizer
 
-embedder, qa_pipeline, qa_tokenizer = load_models()  # التصحيح هنا
+embedder, qa_pipeline, qa_tokenizer = load_models()
 
-# دالة لقياس الطول بالتوكينزات
-def token_length(text):
-    return len(qa_tokenizer.encode(text))
+# استخراج الكلمات المفتاحية
+def extract_keywords(question):
+    arabic_stopwords = {"في", "من", "إلى", "على", "أن", "إن", "أن", "قد", "لا", "ما", "ماذا", "هل", "أين"}
+    question = re.sub(r'[؟?،,.]', '', question)
+    return [word for word in question.split() if word not in arabic_stopwords and len(word) > 2]
 
 # معالجة المستندات
 def process_documents(files):
@@ -43,8 +54,8 @@ def process_documents(files):
         qa_tokenizer,
         chunk_size=300,
         chunk_overlap=50,
-        separators=['\n\n', '\n', '۔', '؟', '!', '. ', ' '],  # محددات عربية
-        is_separator_regex=False  # إضافة هذا الباراميتر
+        separators=['\n\n', '\n', '۔', '؟', '!', '. ', ' '],
+        is_separator_regex=False
     )
 
     current_time = str(time.time())
@@ -53,7 +64,6 @@ def process_documents(files):
         content = file.read().decode("utf-8")
         chunks = text_splitter.split_text(content)
 
-        # الفلترة بناءً على التوكينزات
         valid_chunks = [
             chunk for chunk in chunks
             if len(qa_tokenizer.encode(chunk)) <= 512
@@ -69,7 +79,7 @@ def process_documents(files):
                 ids=ids
             )
 
-    st.success("تمت المعالجة بنجاح!")
+    st.success("تمت معالجة المستندات بنجاح!")
 
 # واجهة المستخدم
 st.title("نظام البحث الذكي في المستندات (عربي)")
@@ -93,22 +103,48 @@ if question:
     if collection.count() == 0:
         st.error("لم يتم العثور على مستندات. الرجاء رفع ملفات نصية أولاً.")
     else:
-        # استرجاع السياق
-        question_embedding = embedder.encode([question])[0]
-        results = collection.query(
-            query_embeddings=[question_embedding],
-            n_results=3
-        )
-        context = " ".join(results['documents'][0])
+        keywords = extract_keywords(question)
+        all_chunks = []
 
-        # استخراج الإجابة
+        # البحث عن كل كلمة مفتاحية
+        if keywords:
+            for keyword in keywords:
+                results = collection.get(
+                    where={"document": {"$eq": keyword}},
+                    limit=3
+                )
+                if results['documents']:
+                    all_chunks.extend(results['documents'][0])
+
+        # إذا لم توجد نتائج دقيقة
+        if not all_chunks:
+            question_embedding = embedder.encode([question])[0]
+            results = collection.query(
+                query_embeddings=[question_embedding],
+                n_results=5
+            )
+            all_chunks = results['documents'][0]
+
+        # نظام التصويت للقطع
+        chunk_scores = defaultdict(int)
+        for chunk in all_chunks:
+            for keyword in keywords:
+                chunk_scores[chunk] += chunk.count(keyword)
+
+        # ترتيب النتائج
+        sorted_chunks = sorted(chunk_scores.items(), key=lambda x: x[1], reverse=True)
+        final_chunks = [chunk for chunk, score in sorted_chunks[:3]]
+
+        # التحضير للعرض
+        context = " ".join(final_chunks)
+
         try:
             qa_result = qa_pipeline({'question': question, 'context': context})
             answer = qa_result['answer']
 
-            # عرض النتائج
+            # عرض الإجابة
             st.subheader("الإجابة")
-            st.write(f"**{answer}**")
+            st.markdown(f"<div class='ar-text'>**{answer}**</div>", unsafe_allow_html=True)
 
             # تظليل الإجابة في السياق
             start = qa_result['start']
@@ -119,7 +155,7 @@ if question:
                     context[end:]
             )
             st.subheader("السياق المصدر")
-            st.markdown(f"<div style='line-height: 2;'>{highlighted_context}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='ar-text'>{highlighted_context}</div>", unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"حدث خطأ في معالجة السؤال: {str(e)}")
@@ -127,8 +163,8 @@ if question:
 # التعليمات
 st.sidebar.markdown("""
 ### التعليمات
-1. ارفع ملفات `.txt` مشفرة بـ UTF-8
-2. الحد الأقصى لحجم الملف: 10MB
-3. الأسئلة المعقدة تحتاج لصياغة واضحة
-4. قد تحتاج بعض الإجابات لتحقق يدوي
+1. ارفع ملفات نصية عربية فقط (UTF-8)
+2. استخدم أسئلة مباشرة تحتوي على كلمات مفتاحية
+3. الأسماء والأماكن تحصل على أولوية في النتائج
+4. الحد الأقصى لحجم الملف: 5MB
 """)

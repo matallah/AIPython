@@ -47,25 +47,46 @@ def handle_file_upload(uploaded_file):
     with conn:
         for sent, emb in zip(sentences, embeddings):
             emb_list = emb.tolist()  # Convert embedding to list
-            print(f"Inserting embedding: {emb_list}")  # Debug print
             cur.execute(
                 "INSERT INTO documents (content, embedding, source) VALUES (%s, %s, %s)",
                 (sent, emb_list, uploaded_file.name)
             )
 
-
-
 def search_database(query, k=5):
-    """Search database for similar sentences to query"""
-    query_emb = get_embedding(query)
+    """Search database for similar sentences to query, prioritizing exact matches"""
+    # First, check for exact matches
     cur.execute(
-        "SELECT content, source, 1 - (embedding <=> %s::vector) AS similarity "
-        "FROM documents "
-        "ORDER BY similarity DESC "
-        "LIMIT %s",
-        (query_emb.tolist(), k)  # Ensure embedding is passed as a list and cast to vector
+        "SELECT content, source FROM documents WHERE content LIKE %s",
+        (f"%{query}%",)  # Properly formatting the parameter
     )
-    return cur.fetchall()
+    exact_matches = cur.fetchall()
+
+    # If we have enough exact matches, return them
+    if len(exact_matches) >= k:
+        return [(content, source, 1.0) for content, source in exact_matches[:k]]
+
+    # Otherwise, get vector similarity matches for remaining slots
+    query_emb = get_embedding(query)
+    remaining = k - len(exact_matches)
+
+    if remaining > 0:
+        cur.execute(
+            "SELECT content, source, 1 - (embedding <=> %s::vector) AS similarity "
+            "FROM documents "
+            "WHERE content != %s "
+            "ORDER BY similarity DESC "
+            "LIMIT %s",
+            (query_emb.tolist(), query, remaining)
+        )
+        similarity_matches = cur.fetchall()
+    else:
+        similarity_matches = []
+
+    # Combine results, exact matches first
+    results = [(content, source, 1.0) for content, source in exact_matches] + \
+              [(content, source, similarity) for content, source, similarity in similarity_matches]
+
+    return results[:k]
 
 def display_results(results):
     """Display search results with confidence scores using an enhanced card design."""
@@ -127,10 +148,6 @@ def display_results(results):
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-
-
-
 
 # Question section
 query = st.text_input("Ask a question about the documents:", "")

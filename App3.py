@@ -28,11 +28,6 @@ def get_embedding(text):
         outputs = model(**inputs)
     return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
 
-def reshape_arabic_text(text):
-    """Reshape Arabic text for proper display"""
-    reshaped_text = reshape(text)
-    return bidi.algorithm.get_display(reshaped_text)
-
 def split_arabic_sentences(text):
     """Split Arabic text into sentences using regex"""
     # Arabic sentence delimiters: .!? and Arabic-specific characters
@@ -72,19 +67,18 @@ def search_database(query, k=5):
     )
     return cur.fetchall()
 
-
-
 def display_results(results):
     """Display search results with confidence scores"""
     answer_counts = {}
 
     for idx, (content, source, similarity) in enumerate(results):
-        answer = content.split(":")[-1].strip() if ":" in content else content
-        reshaped_answer = reshape_arabic_text(answer)
+        # Reshape the Arabic text for proper display
+        reshaped_content = content
+        answer = reshaped_content.split(":")[-1].strip() if ":" in reshaped_content else reshaped_content
 
         # Calculate confidence score
         confidence = round(similarity * 100, 2)
-        source_key = f"{reshaped_answer} (Source: {source})"
+        source_key = f"{answer} (Source: {source})"
 
         if source_key in answer_counts:
             answer_counts[source_key].append(confidence)
@@ -98,10 +92,16 @@ def display_results(results):
 
     for answer, confidences in answer_counts.items():
         avg_confidence = sum(confidences) / len(confidences)
-        st.write(f"• {answer} (Confidence: {avg_confidence}%)")
+        # Use HTML and CSS to ensure correct RTL rendering
+        st.markdown(f"""
+        <div style="text-align: right; unicode-bidi: embed;">
+            • {answer} (Confidence: {avg_confidence}%)
+        </div>
+        """, unsafe_allow_html=True)
+
 
 # Streamlit UI
-st.title("Arabic Document QA System")
+st.title("هلا")
 st.markdown("Upload documents and ask questions about their content.")
 
 # File upload section

@@ -4,7 +4,6 @@ import logging
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 import ast
-
 import streamlit as st
 import psycopg2
 from psycopg2.extras import execute_values
@@ -13,6 +12,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline, AutoTokenizer
 import numpy as np
+from pyarabic.araby import normalize_hamza
 
 # Constants
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
@@ -26,11 +26,9 @@ ARABIC_STOPWORDS = {
     "في", "من", "إلى", "على", "أن", "إن", "اين", "لا", "ما", "ماذا", "هل", "أين",
 }
 
-# Configuration class
 @dataclass
 class Config:
     db_params: dict = None
-
     def __post_init__(self):
         load_dotenv()
         self.db_params = {
@@ -41,10 +39,6 @@ class Config:
             "port": os.getenv("DB_PORT", "5432")
         }
 
-# Logger setup
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
 class DatabaseManager:
     def __init__(self, config: Config):
         self.conn = None
@@ -52,35 +46,32 @@ class DatabaseManager:
         self.config = config
 
     def connect(self) -> None:
-        """Initialize database connection and create table"""
         try:
             self.conn = psycopg2.connect(**self.config.db_params)
             self.cur = self.conn.cursor()
             self._setup_schema()
         except Exception as e:
-            logger.error(f"Database connection failed: {str(e)}")
+            logging.error(f"Database connection failed: {str(e)}")
             raise
 
     def _setup_schema(self) -> None:
-        """Setup database schema"""
         try:
             self.cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             self.conn.commit()
         except Exception as e:
-            logger.warning(f"Vector extension setup failed: {str(e)}")
+            logging.warning(f"Vector extension setup failed: {str(e)}")
             self.conn.rollback()
 
-        self.cur.execute("""
+        self.cur.execute(f"""
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
                 text TEXT NOT NULL,
-                embedding VECTOR(%s) NOT NULL
+                embedding VECTOR({EMBEDDING_DIM}) NOT NULL
             )
-        """, (EMBEDDING_DIM,))
+        """)
         self.conn.commit()
 
     def close(self) -> None:
-        """Close database connection"""
         if self.cur:
             self.cur.close()
         if self.conn:
@@ -98,8 +89,7 @@ class DocumentProcessor:
             separators=['\n\n', '\n', '۔', '؟', '!', '. ', ' ']
         )
 
-    def validate_files(self, files: List[st.runtime.uploaded_file_manager.UploadedFile]) -> List:
-        """Validate uploaded files"""
+    def validate_files(self, files: List) -> List:
         valid_files = []
         for file in files:
             if file.size > MAX_FILE_SIZE:
@@ -111,19 +101,17 @@ class DocumentProcessor:
             valid_files.append(file)
         return valid_files
 
-    def process_files(self, files: List[st.runtime.uploaded_file_manager.UploadedFile]) -> int:
-        """Process and index documents"""
+    def process_files(self, files: List) -> int:
         total_chunks = 0
         for file in files:
             try:
                 content = file.read().decode("utf-8")
+                content = normalize_hamza(content)
                 chunks = self.text_splitter.split_text(content)
                 valid_chunks = [c for c in chunks if len(self.tokenizer.encode(c)) <= 512]
-
                 if valid_chunks:
                     embeddings = self.embedder.encode(valid_chunks, show_progress_bar=False)
                     data = [(chunk, embedding.tolist()) for chunk, embedding in zip(valid_chunks, embeddings)]
-
                     execute_values(
                         self.db_manager.cur,
                         "INSERT INTO documents (text, embedding) VALUES %s",
@@ -133,7 +121,7 @@ class DocumentProcessor:
                     self.db_manager.conn.commit()
                     total_chunks += len(data)
             except Exception as e:
-                logger.error(f"Error processing {file.name}: {str(e)}")
+                logging.error(f"Error processing {file.name}: {str(e)}")
                 st.error(f"خطأ في معالجة {file.name}. تأكد من ترميز UTF-8")
         return total_chunks
 
@@ -144,17 +132,16 @@ class SearchEngine:
         self.qa_pipeline = qa_pipeline
 
     def extract_keywords(self, question: str) -> List[str]:
-        """Extract Arabic keywords from question"""
         cleaned = re.sub(r'[؟?،,.]', '', question)
-        return [word for word in cleaned.split()
-                if word not in ARABIC_STOPWORDS and len(word) > 2]
+        words = [word for word in cleaned.split()
+                 if word not in ARABIC_STOPWORDS and len(word) > 2]
+        return list(set(words))
 
     def search(self, question: str) -> Tuple[str, str]:
-        """Search documents and return answer with context"""
         keywords = self.extract_keywords(question)
         question_embedding = self.embedder.encode([question])[0]
-
         chunks = self._get_candidate_chunks(keywords, question_embedding)
+
         if not chunks:
             return "لا توجد نتائج كافية", ""
 
@@ -165,13 +152,13 @@ class SearchEngine:
             highlighted = f"{context[:start]}<mark>{context[start:end]}</mark>{context[end:]}"
             return qa_result['answer'], highlighted
         except Exception as e:
-            logger.error(f"QA Error: {str(e)}")
+            logging.error(f"QA Error: {str(e)}")
             return "تعذر إيجاد إجابة واضحة", context
 
     def _get_candidate_chunks(self, keywords: List[str], question_embedding: np.ndarray) -> List[Tuple[str, np.ndarray]]:
-        """Get and rank candidate chunks"""
         chunks = []
-        # Keyword-based search
+
+        # Keyword search
         for keyword in keywords[:3]:
             self.db_manager.cur.execute("""
                 SELECT text, embedding 
@@ -195,24 +182,19 @@ class SearchEngine:
         scored_chunks = []
         for text, embedding_str in chunks:
             try:
-                # Convert string embedding to NumPy array
-                embedding = np.array(ast.literal_eval(str(embedding_str)), dtype=np.float32)
+                embedding = np.array(ast.literal_eval(embedding_str), dtype=np.float32)
                 keyword_score = sum(text.count(kw) for kw in keywords)
                 similarity = np.dot(embedding, question_embedding) / (
                         np.linalg.norm(embedding) * np.linalg.norm(question_embedding)
                 )
                 scored_chunks.append((text, embedding, keyword_score + similarity * 2))
-            except (ValueError, SyntaxError, TypeError) as e:
-                logger.error(f"Failed to process embedding for text '{text[:50]}...': {str(e)}")
-                continue
             except Exception as e:
-                logger.error(f"Similarity calculation failed for text '{text[:50]}...': {str(e)}")
+                logging.error(f"Error processing chunk: {str(e)}")
                 continue
 
         return sorted(scored_chunks, key=lambda x: x[2], reverse=True)
 
 def load_models():
-    """Load and cache ML models"""
     @st.cache_resource
     def _load():
         embedder = SentenceTransformer('sentence-transformers/paraphrase-multilingual-mpnet-base-v2')
@@ -226,70 +208,112 @@ def load_models():
     return _load()
 
 def main():
-    """Main application logic"""
-    # Initialize components
     st.set_page_config(page_title="نظام البحث الذكي", layout="wide")
     config = Config()
     db_manager = DatabaseManager(config)
     db_manager.connect()
-
     embedder, tokenizer, qa_pipeline = load_models()
     processor = DocumentProcessor(db_manager, embedder, tokenizer)
     search_engine = SearchEngine(db_manager, embedder, qa_pipeline)
 
-    # CSS
+    # Custom CSS
     st.markdown("""
         <style>
-        body { direction: rtl; text-align: right; font-family: 'Lateef', sans-serif; }
-        .ar-text { line-height: 2; padding: 1rem; }
-        mark { background-color: #ffff00; padding: 0.2rem; }
-        .sidebar .sidebar-content { background-color: #f5f5f5; }
+        body { 
+            direction: rtl; 
+            text-align: right; 
+            font-family: 'Lateef', sans-serif; 
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .center-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 2rem 0;
+        }
+        .search-box {
+            width: 60%;
+            margin-bottom: 1.5rem;
+        }
+        .result-container {
+            width: 80%;
+            margin: 0 auto;
+            text-align: right;
+        }
+        .ar-text { 
+            line-height: 2; 
+            padding: 1rem; 
+            text-align: justify;
+        }
+        mark { 
+            background-color: #ffff00; 
+            padding: 0.2rem; 
+        }
+        .sidebar .sidebar-content { 
+            background-color: #f5f5f5; 
+        }
         </style>
     """, unsafe_allow_html=True)
 
     st.title("نظام البحث الذكي في المستندات العربية")
 
-    # Sidebar
+    # Main content area
+    with st.container():
+        # Search section
+        with st.form(key='search_form'):
+            col1, col2 = st.columns([6, 1])
+            with col1:
+                question = st.text_input(
+                    "أدخل سؤالك هنا",
+                    placeholder="مثال: متى تم افتتاح الجامعة؟",
+                    key="search_query"
+                )
+            with col2:
+                st.write("")  # Vertical alignment
+                st.write("")
+                submit_button = st.form_submit_button("بحث")
+
+        # Results section
+        if submit_button and question.strip():
+            with st.spinner("البحث عن الإجابة..."):
+                db_manager.cur.execute("SELECT COUNT(*) FROM documents")
+                if db_manager.cur.fetchone()[0] == 0:
+                    st.error("⚠️ لم يتم تحميل أي مستندات بعد!")
+                else:
+                    answer, context = search_engine.search(question)
+                    st.markdown("<div class='result-container'>", unsafe_allow_html=True)
+                    st.subheader("الإجابة:")
+                    st.markdown(f"<div class='ar-text'>{answer}</div>", unsafe_allow_html=True)
+                    st.subheader("السياق المرجعي:")
+                    st.markdown(f"<div class='ar-text'>{context}</div>", unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Sidebar for uploads
     with st.sidebar:
-        with st.expander("رفع المستندات", expanded=True):
-            uploaded_files = st.file_uploader(
-                "اختر ملفات TXT (UTF-8)",
-                type=["txt"],
-                accept_multiple_files=True
-            )
-            if uploaded_files:
-                valid_files = processor.validate_files(uploaded_files)
-                if valid_files:
-                    with st.spinner("معالجة المستندات..."):
-                        count = processor.process_files(valid_files)
-                        st.success(f"تمت معالجة {count} قطعة نصية بنجاح!")
+        st.header("إدارة المستندات")
+        uploaded_files = st.file_uploader(
+            "رفع ملفات TXT (UTF-8)",
+            type=["txt"],
+            accept_multiple_files=True
+        )
+        if uploaded_files:
+            valid_files = processor.validate_files(uploaded_files)
+            if valid_files:
+                with st.spinner("جارٍ معالجة المستندات..."):
+                    count = processor.process_files(valid_files)
+                    st.success(f"تمت معالجة {count} قطعة نصية بنجاح!")
+        st.markdown("""
+            <div style="text-align: center; padding: 1rem;">
+                <p>طور بواسطة <a href="https://example.com" target="_blank">فريق الذكاء الاصطناعي</a></p>
+            </div>
+        """, unsafe_allow_html=True)
 
-        with st.expander("البحث", expanded=True):
-            question = st.text_input("أدخل سؤالك هنا", placeholder="مثال: متى تم افتتاح الجامعة؟")
-            if st.button("بحث") and question.strip():
-                with st.spinner("البحث عن الإجابة..."):
-                    db_manager.cur.execute("SELECT COUNT(*) FROM documents")
-                    if db_manager.cur.fetchone()[0] == 0:
-                        st.error("⚠️ لم يتم تحميل أي مستندات بعد!")
-                    else:
-                        answer, context = search_engine.search(question)
-                        st.subheader("الإجابة:")
-                        st.markdown(f"<div class='ar-text'>{answer}</div>", unsafe_allow_html=True)
-                        st.subheader("السياق المرجعي:")
-                        st.markdown(f"<div class='ar-text'>{context}</div>", unsafe_allow_html=True)
-
-    st.sidebar.markdown("""
-        <div style="text-align: center; padding: 1rem;">
-            <p>طور بواسطة <a href="https://example.com" target="_blank">فريق الذكاء الاصطناعي</a></p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # Cleanup
     db_manager.close()
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        logger.error(f"Application failed: {str(e)}")
+        logging.error(f"Application failed: {str(e)}")
         st.error("حدث خطأ في تشغيل التطبيق")

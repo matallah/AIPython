@@ -68,15 +68,15 @@ def search_database(query, k=5):
     return cur.fetchall()
 
 def display_results(results):
-    """Display search results with confidence scores"""
+    """Display search results with confidence scores using an enhanced card design."""
     answer_counts = {}
 
     for idx, (content, source, similarity) in enumerate(results):
-        # Reshape the Arabic text for proper display
-        reshaped_content = content
+        # Reshape the Arabic text for proper display if needed
+        reshaped_content = content  # (Apply any reshaping logic if necessary)
         answer = reshaped_content.split(":")[-1].strip() if ":" in reshaped_content else reshaped_content
 
-        # Calculate confidence score
+        # Calculate confidence score in percentage
         confidence = round(similarity * 100, 2)
         source_key = f"{answer} (Source: {source})"
 
@@ -92,24 +92,45 @@ def display_results(results):
 
     for answer, confidences in answer_counts.items():
         avg_confidence = sum(confidences) / len(confidences)
-        # Use HTML and CSS to ensure correct RTL rendering
         st.markdown(f"""
-        <div style="text-align: right; unicode-bidi: embed;">
-            • {answer} (Confidence: {avg_confidence}%)
+        <div style="
+            text-align: right;
+            direction: rtl;
+            unicode-bidi: embed;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            background: #f9f9f9;
+        ">
+            <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 4px;">
+                • {answer}
+            </div>
+            <div style="display: flex; align-items: center;">
+                <div style="
+                    flex-grow: 1;
+                    height: 10px;
+                    background: #e0e0e0;
+                    border-radius: 5px;
+                    margin-left: 8px;
+                ">
+                    <div style="
+                        width: {avg_confidence}%;
+                        height: 100%;
+                        background: {'#4caf50' if avg_confidence >= 75 else '#ff9800' if avg_confidence >= 50 else '#f44336'};
+                        border-radius: 5px;
+                    "></div>
+                </div>
+                <div style="font-size: 0.9em; margin-right: 8px;">
+                    {avg_confidence:.1f}%
+                </div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
 
-# Streamlit UI
-st.title("هلا")
-st.markdown("Upload documents and ask questions about their content.")
 
-# File upload section
-uploaded_file = st.file_uploader("Upload a document", type=["txt", "pdf", "docx"])
-if uploaded_file:
-    if st.button("Process File"):
-        handle_file_upload(uploaded_file)
-        st.success("File processed successfully!")
+
 
 # Question section
 query = st.text_input("Ask a question about the documents:", "")
@@ -126,6 +147,13 @@ st.sidebar.markdown("""
 3. View answers with confidence scores
 4. Answers are retrieved from the uploaded documents
 """)
+
+# File upload section
+uploaded_file = st.sidebar.file_uploader("Upload a document", type=["txt", "pdf", "docx"])
+if uploaded_file:
+    if st.sidebar.button("Process File"):
+        handle_file_upload(uploaded_file)
+        st.sidebar.success("File processed successfully!")
 
 # About section
 st.sidebar.header("About")

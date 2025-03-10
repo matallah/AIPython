@@ -52,7 +52,7 @@ def handle_file_upload(uploaded_file):
                 (sent, emb_list, uploaded_file.name)
             )
 
-def search_database(query, k=5):
+def search_database(query, k=15):
     """Search database for similar sentences to query, prioritizing exact matches"""
     # First, check for exact matches
     cur.execute(

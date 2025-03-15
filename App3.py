@@ -17,7 +17,7 @@ conn = psycopg2.connect(
 cur = conn.cursor()
 
 # Load offline Arabic BERT model
-model_name = "asafaya/bert-base-arabic"
+model_name = "intfloat/multilingual-e5-large"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModel.from_pretrained(model_name)
 

@@ -35,6 +35,39 @@ def split_arabic_sentences(text):
     sentences = re.split(delimiters, text)
     return [s.strip() for s in sentences if s.strip()]
 
+def split_and_embed_text(text, doc_id, doc_name):
+    """Splits text into chunks, generates embeddings, and prepares data for database insertion."""
+    sentences = split_arabic_sentences(text)
+
+    max_sentences = 5  # Adjust as needed
+    chunks = []
+    current_chunk = []
+    for sentence in sentences:
+        current_chunk.append(sentence)
+        if len(current_chunk) >= max_sentences:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = []
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    embeddings = [get_embedding(chunk) for chunk in chunks]
+    data = [(chunk, emb.tolist(), doc_id, doc_name) for chunk, emb in zip(chunks, embeddings)]
+    return data
+
+def insert_text_with_metadata(text, doc_id, doc_name):
+    """Inserts text with metadata after splitting and embedding."""
+    try:
+        data = split_and_embed_text(text, doc_id, doc_name)
+        with conn:
+            cur.executemany(
+                "INSERT INTO documents (content, embedding, doc_id, doc_name) VALUES (%s, %s, %s, %s)",
+                data
+            )
+        return True
+    except Exception as e:
+        print(f"Error inserting text: {e}")
+        return False
+
 def handle_file_upload(uploaded_file):
     """Process uploaded file and store sentences in database"""
     text = uploaded_file.read().decode("utf-8")
@@ -148,6 +181,7 @@ def display_results(results):
             </div>
         </div>
         """, unsafe_allow_html=True)
+st.title("Semantic Search")
 
 # Question section
 query = st.text_input("Ask a question about the documents:", "")
@@ -165,12 +199,35 @@ st.sidebar.markdown("""
 4. Answers are retrieved from the uploaded documents
 """)
 
+# Direct Text Input Section
+st.sidebar.header("Insert Text Directly")
+text_input = st.sidebar.text_area("Enter text:")
+doc_id_input = st.sidebar.text_input("Document ID:")
+doc_name_input = st.sidebar.text_input("Document Name:")
+
+if st.sidebar.button("Insert Text"):
+    if text_input and doc_id_input and doc_name_input:
+        if insert_text_with_metadata(text_input, doc_id_input, doc_name_input):
+            st.sidebar.success("Text inserted successfully!")
+        else:
+            st.sidebar.error("Failed to insert text.")
+    else:
+        st.sidebar.warning("Please fill in all fields.")
+
 # File upload section
-uploaded_file = st.sidebar.file_uploader("Upload a document", type=["txt", "pdf", "docx"])
+uploaded_file = st.sidebar.file_uploader("Upload a document", type=["txt"])  # You'll need to handle other file types separately if you want to keep this
 if uploaded_file:
-    if st.sidebar.button("Process File"):
-        handle_file_upload(uploaded_file)
-        st.sidebar.success("File processed successfully!")
+    if st.sidebar.button("Process File"):  # Change button label if needed
+        # Adapt handle_file_upload to use insert_text_with_metadata if you want to keep file uploads
+        text = uploaded_file.read().decode("utf-8")
+        # You would likely extract doc_id and doc_name from the filename or other metadata
+        # Example (adapt as needed):
+        doc_name = uploaded_file.name
+        doc_id = doc_name  # Or some other logic to get doc_id
+        if insert_text_with_metadata(text, doc_id, doc_name):
+            st.sidebar.success("File processed successfully!")
+        else:
+            st.sidebar.error("Failed to process file.")
 
 # About section
 st.sidebar.header("About")

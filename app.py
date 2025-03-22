@@ -1,149 +1,118 @@
-
-# app.py
 import streamlit as st
-from doc_search import SmartSearchSystem  # Assume previous code is in doc_search.py
-import os
-import time
+import requests
 
-# Initialize system
-@st.cache_resource
-def init_system():
-    return SmartSearchSystem()
+# Define the base URL for the FastAPI app
+BASE_URL = "http://127.0.0.1:8000"
 
-system = init_system()
+def display_results(results):
+    """Display search results with confidence scores using an enhanced card design."""
+    answer_counts = {}
 
-# Custom CSS
-st.markdown("""
-<style>
-    .stTextInput input {border: 2px solid #4CAF50 !important;}
-    .stButton button {background-color: #4CAF50 !important; color: white !important;}
-    .doc-box {padding: 15px; border: 1px solid #ddd; border-radius: 5px; margin: 10px 0;}
-    .answer-box {padding: 20px; background: #f8f9fa; border-radius: 5px; margin: 20px 0;}
-    .source-chip {background: #4CAF50; color: white; padding: 2px 8px; border-radius: 15px; font-size: 0.8em;}
-</style>
-""", unsafe_allow_html=True)
+    for idx, (content, source, similarity) in enumerate(results):
+        reshaped_content = content  # Apply any reshaping logic if necessary
+        answer = reshaped_content.split(":")[-1].strip() if ":" in reshaped_content else reshaped_content
+        confidence = round(similarity * 100, 2)
+        source_key = f"{answer} (Source: {source})"
 
-# Sidebar - Document Management
-with st.sidebar:
-    st.header("📁 Document Management")
-    uploaded_files = st.file_uploader(
-        "Upload documents",
-        type=["txt", "md"],
-        accept_multiple_files=True
-    )
+        if source_key in answer_counts:
+            answer_counts[source_key].append(confidence)
+        else:
+            answer_counts[source_key] = [confidence]
 
-    if uploaded_files:
-        doc_dir = "./your-docs-folder"
-        os.makedirs(doc_dir, exist_ok=True)
+    st.subheader("Answers:")
+    if not answer_counts:
+        st.write("No relevant information found.")
+        return
 
-        for uploaded_file in uploaded_files:
-            file_path = os.path.join(doc_dir, uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+    for answer, confidences in answer_counts.items():
+        avg_confidence = sum(confidences) / len(confidences)
+        st.markdown(f"""
+        <div style="
+            text-align: right;
+            direction: rtl;
+            unicode-bidi: embed;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            background: #f9f9f9;
+        ">
+            <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 4px;">
+                • {answer}
+            </div>
+            <div style="display: flex; align-items: center;">
+                <div style="
+                    flex-grow: 1;
+                    height: 10px;
+                    background: #e0e0e0;
+                    border-radius: 5px;
+                    margin-left: 8px;
+                ">
+                    <div style="
+                        width: {avg_confidence}%;
+                        height: 100%;
+                        background: {'#4caf50' if avg_confidence >= 75 else '#ff9800' if avg_confidence >= 50 else '#f44336'};
+                        border-radius: 5px;
+                    "></div>
+                </div>
+                <div style="font-size: 0.9em; margin-right: 8px;">
+                    {avg_confidence:.1f}%
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        st.success(f"{len(uploaded_files)} files uploaded!")
-        system.vector_db = system.create_vector_db()  # Rebuild index
+st.title("Semantic Search")
 
-# Main Interface
-st.title("🔍 Smart Document Search")
-st.write("Powered by Qwen2.5-7B AI")
-
-# Search Input
-query = st.text_input(
-    "Enter your question:",
-    placeholder="What would you like to search in the documents?",
-    key="search_input"
-)
-
+# Question section
+query = st.text_input("Ask a question about the documents:", "")
 if query:
-    with st.spinner("🔍 Searching documents..."):
-        start_time = time.time()
+    with st.spinner("Searching documents..."):
+        response = requests.post(f"{BASE_URL}/search/", json={"query": query})
+        results = response.json().get("results", [])
+        display_results(results)
 
-        # Perform search
-        response = system.smart_search(query)
+# Instructions
+st.sidebar.header("Instructions")
+st.sidebar.markdown("""
+1. Upload Arabic documents in TXT, PDF, or DOCX format
+2. Ask questions in Arabic
+3. View answers with confidence scores
+4. Answers are retrieved from the uploaded documents
+""")
 
-        # Display main answer
-        st.subheader("AI Answer")
-        st.markdown(f'<div class="answer-box">{response["answer"]}</div>',
-                    unsafe_allow_html=True)
+# Direct Text Input Section
+st.sidebar.header("Insert Text Directly")
+text_input = st.sidebar.text_area("Enter text:")
+doc_id_input = st.sidebar.text_input("Document ID:")
+doc_name_input = st.sidebar.text_input("Document Name:")
 
-        # Display raw results
-        st.subheader("Search Results Analysis")
+if st.sidebar.button("Insert Text"):
+    if text_input and doc_id_input and doc_name_input:
+        response = requests.post(f"{BASE_URL}/insert_text/", json={"text": text_input, "doc_id": doc_id_input, "doc_name": doc_name_input})
+        if response.status_code == 200:
+            st.sidebar.success("Text inserted successfully!")
+        else:
+            st.sidebar.error("Failed to insert text.")
+    else:
+        st.sidebar.warning("Please fill in all fields.")
 
-        cols = st.columns([1, 4])
-        with cols[0]:
-            min_score = st.slider(
-                "Filter by confidence",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.3,
-                step=0.05
-            )
+# File upload section
+uploaded_file = st.sidebar.file_uploader("Upload a document", type=["txt"])
+if uploaded_file:
+    if st.sidebar.button("Process File"):
+        files = {"file": uploaded_file.getvalue()}
+        response = requests.post(f"{BASE_URL}/upload_file/", files=files)
+        if response.status_code == 200:
+            st.sidebar.success("File processed successfully!")
+        else:
+            st.sidebar.error("Failed to process file.")
 
-        with cols[1]:
-            st.caption(f"Showing {len(response['results'])} total matches")
-
-        for i, (doc, score) in enumerate(response["results"], 1):
-            if score < min_score:
-                continue
-
-            source = os.path.basename(doc.metadata['source'])
-            content = doc.page_content.replace("\n", " ").strip()
-
-            with st.expander(f"Match {i}: {source} (Score: {score:.2f})"):
-                col1, col2 = st.columns([2, 8])
-                with col1:
-                    st.metric("Confidence", f"{score:.2f}")
-                    st.progress(score)
-                with col2:
-                    st.write(content)
-
-        # Performance metrics
-        end_time = time.time()
-        st.caption(f"⏱️ Response time: {end_time - start_time:.2f}s")
-
-# Display current documents with content preview
-st.sidebar.markdown("---")
-st.sidebar.subheader("Indexed Documents")
-
-if os.path.exists("./your-docs-folder"):
-    docs = [f for f in os.listdir("./your-docs-folder") if f.endswith((".txt", ".md"))]
-
-    # Initialize session state for selected document
-    if 'selected_doc' not in st.session_state:
-        st.session_state.selected_doc = None
-
-    for doc in docs:
-        col1, col2 = st.sidebar.columns([3, 1])
-        with col1:
-            # Create clickable document names
-            if st.button(f"📄 {doc}", key=f"doc_{doc}"):
-                st.session_state.selected_doc = doc
-        with col2:
-            # Show document size
-            doc_path = os.path.join("./your-docs-folder", doc)
-            size = os.path.getsize(doc_path) / 1024  # KB
-            st.caption(f"{size:.1f}KB")
-
-    # Display selected document content
-    if st.session_state.selected_doc:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Document Preview")
-        try:
-            doc_path = os.path.join("./your-docs-folder", st.session_state.selected_doc)
-            with open(doc_path, "r") as f:
-                content = f.read()
-
-            st.sidebar.text_area(
-                "File Content",
-                value=content,
-                height=300,
-                key=f"content_{st.session_state.selected_doc}",
-                disabled=True
-            )
-        except Exception as e:
-            st.sidebar.error(f"Error reading file: {str(e)}")
-else:
-    st.sidebar.warning("No documents uploaded yet")
-
-# What is the special code?
+# About section
+st.sidebar.header("About")
+st.sidebar.markdown("""
+- **Language Support**: Arabic
+- **Embedding Model**: AraBERT (asafaya/bert-base-arabic)
+- **Vector Database**: PostgreSQL with PGVector
+- **UI Framework**: Streamlit
+""")

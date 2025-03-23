@@ -141,3 +141,7 @@ def search(query_data: SearchQuery):
         return {"results": results}
 
 # Run the app with: uvicorn main:app --reload
+if __name__ == "__main__":
+        import uvicorn
+        uvicorn.run(app, host="localhost", port=8000)
+# http://localhost:8000/docs
